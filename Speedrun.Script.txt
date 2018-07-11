@@ -1,0 +1,287 @@
+/**
+ *	Speedrun mode
+ */
+#Extends "Modes/TrackMania/Base/ModeTrackmania.Script.txt"
+
+#Const	CompatibleMapTypes			"Race"
+#Const	Author						"xAt0mZ"
+#Const	Version						"2018-07-07"
+#Const	ScriptName					"Modes/TrackMania/Speedrun.Script.txt"
+
+// ---------------------------------- //
+// Includes
+// ---------------------------------- //
+#Include "TextLib" as TL
+#Include "MathLib" as ML
+// ---------------------------------- //
+// Settings
+// ---------------------------------- //
+#Setting S_MapsPerMatch		1 as _("Number of maps for speedrun:") ///< Number of maps to play before finishing the speedrun
+#Setting S_RoundsPerMap		0 as _("Rounds per map (0 for 1 round per player):") /// Number of rounds before skipping to next map
+#Setting S_GiveUpPenalty	30 as _("Penalty for DEL (in minutes):")
+
+//#Setting S_ScriptEnvironment "production"
+#Setting S_ScriptEnvironment "development"
+
+// ---------------------------------- //
+// Constants
+// ---------------------------------- //
+#Const Description _("""TODO : WRITE MODE DESCRIPTION""")
+
+#Const C_HudModulePath "Nadeo/TrackMania/TimeAttack/Hud.Module.Gbx" ///< Path to the hud module
+#Const C_ManiaAppUrl "file://Media/ManiaApps/Nadeo/TrackMania/TimeAttack/TimeAttack.Script.txt"
+
+
+// ---------------------------------- //
+// Globales
+// ---------------------------------- //
+declare Integer G_GlobalTime;
+declare Integer G_RoundsCount;
+declare CTmResult[Text] G_PlayersTimes;
+
+// ---------------------------------- //
+// Extends
+// ---------------------------------- //
+***Match_LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+***
+
+***Match_Settings***
+***
+MB_Settings_UseDefaultHud = False;
+***
+
+***Match_Rules***
+***
+ModeInfo::SetName("Speedrun TA");
+ModeInfo::SetType(ModeInfo::C_Type_FreeForAll);
+ModeInfo::SetRules(Description);
+ModeInfo::SetStatusMessage("");
+***
+
+***Match_LoadHud***
+***
+ClientManiaAppUrl = C_ManiaAppUrl;
+Hud_Load(C_HudModulePath);
+MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_Time);
+
+// Initialize UI modules
+UI::LoadModules([
+	UIModules::C_Module_TimeGap, 
+	UIModules::C_Module_Chrono,
+	UIModules::C_Module_CheckpointTime,
+	UIModules::C_Module_PrevBestTime,
+	UIModules::C_Module_SpeedAndDistance,
+	UIModules::C_Module_Countdown,
+	UIModules::C_Module_Laps,
+	UIModules::C_Module_MapInfo,
+	UIModules::C_Module_MapRanking,
+	UIModules::C_Module_LiveInfo,
+	UIModules::C_Module_SpectatorInfo,
+	UIModules::C_Module_ViewersCount
+]);
+UI::SetTimeGapMode("BestRace");
+UI::SetCheckpointTimeMode("BestRace");
+***
+
+***Match_StartServer***
+***
+// Initialize mode
+UseClans = False;
+WarmUp::SetAvailability(False);
+***
+
+***Match_StartMatch***
+***
+G_GlobalTime = 0;
+G_PlayersTimes = CTmResult[Text];
+DisplayUpdatedSpeedrunTime();
+***
+
+***Match_StartMap***
+***
+// Initialize laps
+UI::SetIndependantLaps(False);
+NbLaps = -1;
+
+// reset rounds counter for the map
+G_RoundsCount = 0;
+
+// if not the first map of match restore total time as best (to keep UI updated)
+if (MB_GetMapCount() != 1) {
+	declare toto = CTmResult;
+	toto.Time = 123;
+	foreach (Score in Scores) {
+		declare Player <=> TM::GetPlayer(Score.User.Login);
+		log(Score);
+		log(Score.Id);
+		log(G_PlayersTimes[Player.User.Login]);
+		log(Scores::GetPlayerBestRace(Score));
+		//Scores::SetPlayerBestRace(Score, G_PlayersTimes[Player.User.Login]);
+		Scores::SetPlayerBestRace(Score, toto);//G_PlayersTimes[Player.User.Login]);
+		log(Score.BestRace.Time);
+	}
+}
+***
+
+***Match_StartRound***
+***
+// Initialize race
+declare StartTime = Now + 3000;
+
+// Spawn players for the race
+foreach (Player in Players) {
+	TM::StartRace(Player, StartTime);
+}
+***
+
+***Match_PlayLoop***
+***
+// Manage events
+foreach (Event in PendingEvents) {
+	declare Processed = Events::Valid(Event);
+	if (!Processed) continue;
+
+	// Waypoint
+	if (Event.Type == CTmModeEvent::EType::WayPoint) {
+		if (Event.IsEndRace) {
+			G_GlobalTime += Event.Player.CurRace.Time; // add current time to total time
+//			SavePlayerSpeedrunTime(Event.Player);
+		log("Login : "^Event.Player.User.Login);
+	if (G_PlayersTimes.existskey(Event.Player.User.Login)) {
+		G_PlayersTimes[Event.Player.User.Login].Time += Event.Player.CurRace.Time;
+		log("Exists");
+		}
+	else {
+		G_PlayersTimes[Event.Player.User.Login] = Event.Player.CurRace;
+		log("Doesn't exist / CurRace :"^Event.Player.CurRace.Time);
+		}
+	log("PT : "^G_PlayersTimes);
+	
+	
+	
+			log("score id :"^Event.Player.Score.Id);
+			Scores::SetPlayerPrevRace(Event.Player.Score, Event.Player.CurRace); // save previous race for player
+			Scores::SetPlayerBestRace(Event.Player.Score, G_PlayersTimes[Event.Player.User.Login]); // save total time as best race for player
+			TM::EndRace(Event.Player);
+			log(Event.Player.Score.Id);
+
+			MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_Time);
+			DisplayUpdatedSpeedrunTime();
+			MB_StopRound();
+		}
+	}
+	// GiveUp
+	else if (Event.Type == CTmModeEvent::EType::GiveUp) {
+		G_GlobalTime += (S_GiveUpPenalty*60*1000); //<- this is a 30 minutes penalty for trying to del a speedrun
+		TM::EndRace(Event.Player);
+		DisplayUpdatedSpeedrunTime();
+		MB_StopRound();
+	}
+}
+***
+
+***Match_EndRound***
+***
+TM::WaitRaceAll();
+
+G_RoundsCount += 1;
+MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_Time);
+
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+MB_Sleep(5000); // force time display 6 seconds then reset to normal visibility
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+
+if (MapIsOver()) MB_StopMap();
+***
+
+***Match_EndMap***
+***
+if (MatchIsOver()) MB_StopMatch();
+if (!MB_MapIsRunning() && MB_MatchIsRunning()) MB_SkipPodiumSequence();
+
+MB_SortScores(CTmMode::ETmScoreSortOrder::BestRace_Time);
+Scores::SetDefaultLadderSort(Scores::C_Sort_BestRaceTime);
+Scores::SetPlayerWinner(Scores::GetBestPlayer(Scores::Sort_BestRaceTime(), Scores::Order_Ascending()));
+***
+
+
+***Match_EndMatch***
+***
+DisplayUpdatedSpeedrunTime();
+MB_Sleep(10000);
+***
+
+// ---------------------------------- //
+// Functions
+// ---------------------------------- //
+// ---------------------------------- //
+
+// ---------------------------------- //
+/** Check if we should go to the next map
+ *
+ *	@return		True if it is the case, false otherwise
+ */
+Boolean MapIsOver() {
+	if ((S_RoundsPerMap > 0 && G_RoundsCount == S_RoundsPerMap) ||
+		(S_RoundsPerMap <= 0 && Players.count > 0 && G_RoundsCount == Players.count))
+		return True;
+	return False;
+}
+
+// ---------------------------------- //
+/** Check if we should go to the next match
+ *
+ *	@return		True if it is the case, false otherwise
+ */
+Boolean MatchIsOver() {
+	if (S_MapsPerMatch > 0 && MB_GetMapCount() >= S_MapsPerMatch) return True; //< There is a maps limit and it is reached
+	return False;
+}
+
+// ---------------------------------- //
+/** Convert time to text
+ *
+ *	@return		Time as text
+ */
+Text TimeToText(Integer _Time) {
+  declare Time = TL::TimeToText(_Time, True);
+  declare Milliseconds = ML::Abs(_Time % 10);
+  if (Milliseconds >= 0) Time ^= TL::ToText(Milliseconds);
+  return Time;
+}
+
+// ---------------------------------- //
+/** Display speedrun total time & update UI
+ *
+ *	@return		Void
+ */
+Void DisplayUpdatedSpeedrunTime() {
+	declare ComposedMessage = TL::Compose("%1 "^TimeToText(G_GlobalTime), _("Total speedrun time :"));
+	foreach (Player in AllPlayers) {
+		UI::SendLiveEvent(Player, ComposedMessage, """""");
+	}
+	if (Hud != Null) Hud.ScoresTable.SetFooterText(ComposedMessage);
+}
+
+// ---------------------------------- //
+/** Display speedrun total time & update UI
+ *
+ *	@return		Id of score matching player
+ */
+Void SavePlayerSpeedrunTime(CTmPlayer _Player) {
+	log("Login : "^_Player.User.Login);
+	if (G_PlayersTimes.existskey(_Player.User.Login)) {
+		G_PlayersTimes[_Player.User.Login].Time += _Player.CurRace.Time;
+		log("Exists");
+		}
+	else {
+		G_PlayersTimes[_Player.User.Login] = _Player.CurRace;
+		log("Doesn't exist");
+		log(_Player.CurRace);
+		}
+	log(G_PlayersTimes[_Player.User.Login]);
+}
